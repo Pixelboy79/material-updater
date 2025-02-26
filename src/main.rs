@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{self, BufReader, Read, Seek, Write},
+    io::{self, stdout, BufReader, Read, Seek, Stdout, Write},
     path::{Path, PathBuf},
 };
 
@@ -185,6 +185,7 @@ where
     let mut output_zip = ZipWriter::new(output);
     let mut translated_shaders = 0;
     let mut warnings = 0;
+    let mut data = Vec::new();
     for index in 0..input_zip.len() {
         let mut file = input_zip.by_index(index)?;
         if !file.name().ends_with(".material.bin") {
@@ -192,7 +193,9 @@ where
             continue;
         }
         print!("Processing file {}", file.name().green());
-        let mut data = Vec::with_capacity(file.size().try_into()?);
+        //   let mut data = Vec::with_capacity(file.size().try_into()?);
+        data.clear();
+        data.reserve(file.size().try_into()?);
         file.read_to_end(&mut data)?;
         let material = match read_material(&data) {
             Ok(material) => material,
