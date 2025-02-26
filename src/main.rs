@@ -12,8 +12,9 @@ use clap::{
     },
     Parser, ValueEnum,
 };
-use console::style;
+
 use materialbin::{CompiledMaterialDefinition, MinecraftVersion, WriteError};
+use owo_colors::{colors::Yellow, OwoColorize};
 use scroll::Pread;
 use tempfile::tempfile;
 use zip::{
@@ -97,7 +98,7 @@ fn main() -> anyhow::Result<()> {
         };
         let mut tmp_file = tempfile()?;
         let mut output_file = file_to_shrodinger(&mut tmp_file, opts.yeet)?;
-        println!("Processing input {}", style(opts.file).cyan());
+        println!("Processing input {}", opts.file.cyan());
         file_update(&mut input_file, &mut output_file, mcversion)?;
         tmp_file.rewind()?;
         if !opts.yeet {
@@ -124,7 +125,7 @@ fn main() -> anyhow::Result<()> {
         };
         let mut tmp_file = tempfile()?;
         let mut output_file = file_to_shrodinger(&mut tmp_file, opts.yeet)?;
-        println!("Processing input zip {}", style(opts.file).cyan());
+        println!("Processing input zip {}", opts.file.cyan());
         zip_update(
             &mut input_file,
             &mut output_file,
@@ -190,7 +191,7 @@ where
             output_zip.raw_copy_file(file)?;
             continue;
         }
-        print!("Processing file {}", style(file.name()).cyan());
+        print!("Processing file {}", file.name().green());
         let mut data = Vec::with_capacity(file.size().try_into()?);
         file.read_to_end(&mut data)?;
         let material = match read_material(&data) {
@@ -208,8 +209,8 @@ where
                 WriteError::Compat(issue) => {
                     println!(
                         "{}:\n{}",
-                        style("Ignoring materialbin because of compatibility error:")
-                            .on_yellow()
+                        "Ignoring materialbin because of compatibility error:"
+                            .fg::<Yellow>()
                             .red(),
                         issue
                     );
@@ -224,15 +225,12 @@ where
     }
     output_zip.finish()?;
     if warnings != 0 {
-        println!(
-            "{}",
-            style(format!("{warnings} warnings while updating")).yellow()
-        );
+        println!("{}", format!("{warnings} warnings while updating").yellow());
     }
     println!(
         "Ported {} materials in zip to version {}",
-        style(translated_shaders.to_string()).green(),
-        style(version.to_string()).cyan()
+        translated_shaders.to_string().green(),
+        version.to_string().cyan()
     );
     Ok(())
 }
@@ -240,7 +238,7 @@ where
 fn read_material(data: &[u8]) -> anyhow::Result<CompiledMaterialDefinition> {
     for version in materialbin::ALL_VERSIONS {
         if let Ok(material) = data.pread_with(0, version) {
-            println!("{}", style(format!(" [{version}]")).dim());
+            print!("{}", format!(" [{version}]\n").dimmed());
             return Ok(material);
         }
     }

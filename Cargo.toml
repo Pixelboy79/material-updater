@@ -8,11 +8,12 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.86"
 clap = { version = "4.5.6", features = ["derive"] }
-console = "0.15.8"
-materialbin = { version = "0.1.1", git = "https://github.com/mcbegamerxx954/materialbin" }
+flate2 = { version = "1.1.0", features = ["zlib-rs"], default-features = false }
+materialbin = { version = "0.1.1", path = "../materialbin" }
+owo-colors = "4.1.0"
 
 scroll = "0.12.0"
 tempfile = "3.10.1"
-zip = { version = "2.1.3", default-features = false, features = ["deflate", "time"] }
+zip = { version = "2.2.3", default-features = false, features = ["deflate", "deflate-flate2"] }
 
 
