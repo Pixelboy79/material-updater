@@ -5,7 +5,8 @@ use std::{
 };
 
 mod mtbin;
-use crate::mtbin::handle_lightmaps;
+// Import MVersion from mtbin to access the new 26.10.20 option
+use crate::mtbin::{handle_lightmaps, MVersion};
 
 use anyhow::Context;
 use clap::{
@@ -13,7 +14,7 @@ use clap::{
         styling::{AnsiColor, Style},
         Styles,
     },
-    Parser, ValueEnum,
+    Parser,
 };
 use console::style;
 use materialbin::{CompiledMaterialDefinition, MinecraftVersion, WriteError};
@@ -25,10 +26,10 @@ use zip::{
 };
 
 #[derive(Parser)]
-#[clap(name = "Material Updater", version = "0.1.11")]
+#[clap(name = "Material Updater", version = "0.1.13")]
 #[command(version, about, long_about = None, styles = get_style())]
 struct Options {
-    /// Shader pack fild to update
+    /// Shader pack file to update
     #[clap(required = true)]
     file: String,
 
@@ -48,27 +49,6 @@ struct Options {
     #[arg(short, long)]
     output: Option<PathBuf>,
 }
-// Hack for clap support
-#[derive(ValueEnum, Clone)]
-enum MVersion {
-	V1_21_110,
-    V1_21_20,
-    V1_20_80,
-    V1_19_60,
-    V1_18_30,
-}
-impl MVersion {
-    const fn as_version(&self) -> MinecraftVersion {
-        match self {
-            Self::V1_20_80 => MinecraftVersion::V1_21_20, // Attention!
-            Self::V1_19_60 => MinecraftVersion::V1_19_60,
-            Self::V1_18_30 => MinecraftVersion::V1_18_30,
-            Self::V1_21_20 => MinecraftVersion::V1_20_80, // Attention!
-            Self::V1_21_110 => MinecraftVersion::V1_21_110,
-
-        }
-    }
-}
 
 const fn get_style() -> Styles {
     Styles::styled()
@@ -77,36 +57,42 @@ const fn get_style() -> Styles {
         .literal(Style::new().fg_color(None).bold())
         .placeholder(AnsiColor::Green.on_default())
 }
+
 fn main() -> anyhow::Result<()> {
     let opts = Options::parse();
-    let mcversion = match opts.target_version {
-        Some(version) => version.as_version(),
-        None => {
-            const STABLE_LATEST: MinecraftVersion = MinecraftVersion::V1_21_110;
-            println!(
-                "No target version specified, updating to latest stable: {}",
-                STABLE_LATEST
-            );
-            STABLE_LATEST
-        }
-    };
+    
+    // Default to the new 26.10.20 if not specified, or fallback to stable
+    let target_mversion = opts.target_version.unwrap_or(MVersion::V26_10_20);
+    
+    // Get the binary version (e.g., 26.10.20 -> 1.21.110 binary format)
+    let binary_mcversion = target_mversion.as_version();
+
+    if opts.target_version.is_none() {
+        println!(
+            "No target version specified, updating to latest preview: 26.10.20 (Binary: {})",
+            binary_mcversion
+        );
+    }
+
     let mut input_file =
         BufReader::new(File::open(&opts.file).with_context(|| "Error while opening input file")?);
+    
     if opts.file.ends_with(".material.bin") {
         let output_filename: PathBuf = match &opts.output {
             Some(output_name) => output_name.to_owned(),
             None => {
                 let auto_name = opts.file.to_string().into();
                 println!("No output name specified, overwriting input file.");
-                // let auto_name = update_filename(&opts.file, &mcversion, ".material.bin")?;
-                // println!("No output name specified, using {auto_name:?}");
                 auto_name
             }
         };
         let mut tmp_file = tempfile()?;
         let mut output_file = file_to_shrodinger(&mut tmp_file, opts.yeet)?;
         println!("Processing input {}", style(opts.file).cyan());
-        file_update(&mut input_file, &mut output_file, mcversion)?;
+        
+        // Pass the MVersion wrapper so we know if we are doing the 26.10.20 fix
+        file_update(&mut input_file, &mut output_file, target_mversion)?;
+        
         tmp_file.rewind()?;
         if !opts.yeet {
             let mut output_file = File::create(output_filename)?;
@@ -118,14 +104,14 @@ fn main() -> anyhow::Result<()> {
         let extension = Path::new(&opts.file)
             .extension()
             .with_context(|| "Input file does not have any extension??, weird")?
-            // At this point its valid utf8 soo
             .to_str()
             .unwrap();
         let extension = ".".to_string() + extension;
         let output_filename: PathBuf = match &opts.output {
             Some(output_name) => output_name.to_owned(),
             None => {
-                let auto_name = update_filename(&opts.file, &mcversion, &extension)?;
+                // Use binary version for filename suffix (e.g. _1.21.110.mcpack)
+                let auto_name = update_filename(&opts.file, &binary_mcversion, &extension)?;
                 println!("No output name specified, using {auto_name:?}");
                 auto_name
             }
@@ -133,12 +119,14 @@ fn main() -> anyhow::Result<()> {
         let mut tmp_file = tempfile()?;
         let mut output_file = file_to_shrodinger(&mut tmp_file, opts.yeet)?;
         println!("Processing input zip {}", style(opts.file).cyan());
+        
         zip_update(
             &mut input_file,
             &mut output_file,
-            mcversion,
+            target_mversion,
             opts.zip_compression,
         )?;
+        
         tmp_file.rewind()?;
         if !opts.yeet {
             let mut output_file = File::create(output_filename)?;
@@ -147,6 +135,7 @@ fn main() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
 fn file_to_shrodinger<'a>(
     file: &'a mut File,
     dissapear: bool,
@@ -157,6 +146,7 @@ fn file_to_shrodinger<'a>(
         Ok(ShrodingerOutput::File(file))
     }
 }
+
 fn update_filename(
     filename: &str,
     version: &MinecraftVersion,
@@ -168,7 +158,8 @@ fn update_filename(
     Ok((stripped.to_string() + "_" + &version.to_string() + postfix).into())
 }
 
-fn file_update<R, W>(input: &mut R, output: &mut W, version: MinecraftVersion) -> anyhow::Result<()>
+// Updated signature: takes MVersion
+fn file_update<R, W>(input: &mut R, output: &mut W, version: MVersion) -> anyhow::Result<()>
 where
     R: Read + Seek,
     W: Write + Seek,
@@ -177,19 +168,23 @@ where
     let _read = input.read_to_end(&mut data)?;
     let mut material = read_material(&data)?;
 
-    if (material.name == "RenderChunk") && (version == MinecraftVersion::V1_21_110) 
+    // Check if we need to fix lightmaps for specific versions
+    if (material.name == "RenderChunk") && 
+       (version == MVersion::V1_21_110 || version == MVersion::V26_10_20) 
     {
-        handle_lightmaps(&mut material);
+        handle_lightmaps(&mut material, version);
     };
 
-    material.write(output, version)?;
+    // Write using the underlying binary version
+    material.write(output, version.as_version())?;
     Ok(())
 }
 
+// Updated signature: takes MVersion
 fn zip_update<R, W>(
     input: &mut R,
     output: &mut W,
-    version: MinecraftVersion,
+    version: MVersion,
     compression_level: Option<u32>,
 ) -> anyhow::Result<()>
 where
@@ -200,6 +195,10 @@ where
     let mut output_zip = ZipWriter::new(output);
     let mut translated_shaders = 0;
     let mut warnings = 0;
+    
+    // Extract binary version for the file header writing
+    let bin_ver = version.as_version();
+
     for index in 0..input_zip.len() {
         let mut file = input_zip.by_index(index)?;
         if !file.name().ends_with(".material.bin") {
@@ -216,15 +215,19 @@ where
             }
         };
 
-        if (material.name == "RenderChunk") && (version == MinecraftVersion::V1_21_110) 
+        // Check if we need to fix lightmaps using the high-level MVersion
+        if (material.name == "RenderChunk") && 
+           (version == MVersion::V1_21_110 || version == MVersion::V26_10_20) 
         {
-            handle_lightmaps(&mut material);
+            handle_lightmaps(&mut material, version);
         };
 
         let file_options = FileOptions::<ExtendedFileOptions>::default()
             .compression_level(compression_level.map(|v| v.into()));
         output_zip.start_file(file.name(), file_options)?;
-        let result = material.write(&mut output_zip, version);
+        
+        // Write using the binary version
+        let result = material.write(&mut output_zip, bin_ver);
         if let Err(err) = result {
             match err {
                 WriteError::Compat(issue) => {
@@ -254,7 +257,7 @@ where
     println!(
         "Ported {} materials in zip to version {}",
         style(translated_shaders.to_string()).green(),
-        style(version.to_string()).cyan()
+        style(bin_ver.to_string()).cyan()
     );
     Ok(())
 }
@@ -269,6 +272,7 @@ fn read_material(data: &[u8]) -> anyhow::Result<CompiledMaterialDefinition> {
 
     anyhow::bail!("Material file is invalid");
 }
+
 enum ShrodingerOutput<'a> {
     File(&'a mut File),
     Nothing,
