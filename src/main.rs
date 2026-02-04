@@ -49,6 +49,8 @@ struct Options {
 // Hack for clap support
 #[derive(ValueEnum, Clone)]
 enum MVersion {
+    V26_0_24,
+    V1_21_110,
     V1_21_20,
     V1_20_80,
     V1_19_60,
@@ -61,6 +63,8 @@ impl MVersion {
             Self::V1_19_60 => MinecraftVersion::V1_19_60,
             Self::V1_18_30 => MinecraftVersion::V1_18_30,
             Self::V1_21_20 => MinecraftVersion::V1_21_20,
+            Self::V1_21_110 => MinecraftVersion::V1_21_110,
+            Self::V26_0_24 => MinecraftVersion::V26_0_24,
         }
     }
 }
@@ -77,7 +81,7 @@ fn main() -> anyhow::Result<()> {
     let mcversion = match opts.target_version {
         Some(version) => version.as_version(),
         None => {
-            const STABLE_LATEST: MinecraftVersion = MinecraftVersion::V1_21_20;
+            const STABLE_LATEST: MinecraftVersion = MinecraftVersion::V1_21_110;
             println!(
                 "No target version specified, updating to latest stable: {}",
                 STABLE_LATEST
