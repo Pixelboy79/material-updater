@@ -1,23 +1,11 @@
 use clap::ValueEnum;
 use materialbin::{
     bgfx_shader::BgfxShader,
-    pass::{ShaderStage, ShaderCodePlatform},
+    pass::ShaderStage,
     CompiledMaterialDefinition, MinecraftVersion,
 };
 use memchr::memmem::Finder;
 use scroll::Pread;
-use std::{
-    ffi::{CStr, CString, OsStr},
-    io::{self, Cursor, Read, Seek, Write},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        LazyLock, Mutex, OnceLock,
-    },
-};
-
-// The Minecraft version we will use to port shaders to
-static MC_VERSION: OnceLock<Option<MinecraftVersion>> = OnceLock::new();
-static IS_UPPER_1_21_100: AtomicBool = AtomicBool::new(false);
 
 // Update Enum to include the new 2026 numbering
 #[derive(ValueEnum, Clone, Copy, PartialEq, Eq, Debug)]
@@ -42,8 +30,8 @@ impl MVersion {
             // Map 26.10.20 to the latest available binary format (likely same as 1.21.110)
             Self::V26_10_20 => MinecraftVersion::V1_21_110,
             Self::V1_21_110 => MinecraftVersion::V1_21_110,
-            Self::V1_21_20 => MinecraftVersion::V1_20_80, // Attention! (Preserved from original)
-            Self::V1_20_80 => MinecraftVersion::V1_21_20, // Attention! (Preserved from original)
+            Self::V1_21_20 => MinecraftVersion::V1_20_80,
+            Self::V1_20_80 => MinecraftVersion::V1_21_20,
             Self::V1_19_60 => MinecraftVersion::V1_19_60,
             Self::V1_18_30 => MinecraftVersion::V1_18_30,
         }
@@ -54,8 +42,10 @@ pub(crate) fn handle_lightmaps(materialbin: &mut CompiledMaterialDefinition, tar
     log::info!("mtbinloader25 handle_lightmaps processing for {:?}", target_version);
     let pattern = b"void main";
 
-    // Define the specific fix for 26.10.20
-    let replace_with = match target_version {
+    // EXPLICIT TYPE ANNOTATION: &[u8]
+    // This fixes the "match arms have incompatible types" error by coercing 
+    // arrays of different lengths (e.g. [u8; 73] vs [u8; 115]) into a common slice type.
+    let replace_with: &[u8] = match target_version {
         // New Fix for 26.10.20+ (fract + y-component packing)
         MVersion::V26_10_20 => b"
 #define a_texcoord1 fract(a_texcoord1.y * vec2(256.0, 4096.0))
@@ -106,6 +96,13 @@ void main",
     }
 }
 
+// Unused function handle_samplers removed or kept if you still need it for older versions. 
+// Assuming you still want it available for older version logic if it's called elsewhere or restored later.
+// However, based on the error log, the imports used only by this function were NOT flagged as unused, 
+// so it's likely main.rs or lib.rs might not be calling it, OR the unused imports I removed were for logic I deleted.
+// I will leave handle_samplers here but clean.
+
+#[allow(dead_code)]
 fn handle_samplers(materialbin: &mut CompiledMaterialDefinition) {
     log::info!("mtbinloader25 handle_samplers");
     let pattern = b"void main ()";
