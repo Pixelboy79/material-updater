@@ -1,16 +1,14 @@
+use clap::ValueEnum;
 use materialbin::{
     bgfx_shader::BgfxShader,
     pass::{ShaderStage, ShaderCodePlatform},
     CompiledMaterialDefinition, MinecraftVersion,
 };
 use memchr::memmem::Finder;
-// use ndk::asset::{Asset, AssetManager};
-// use ndk_sys::{AAsset, AAssetManager};
 use scroll::Pread;
 use std::{
     ffi::{CStr, CString, OsStr},
     io::{self, Cursor, Read, Seek, Write},
-    // os::unix::ffi::OsStrExt,
     sync::{
         atomic::{AtomicBool, Ordering},
         LazyLock, Mutex, OnceLock,
@@ -21,86 +19,84 @@ use std::{
 static MC_VERSION: OnceLock<Option<MinecraftVersion>> = OnceLock::new();
 static IS_UPPER_1_21_100: AtomicBool = AtomicBool::new(false);
 
-#[cfg(feature = "autofix")]
-pub(crate) fn process_material(man: *mut AAssetManager, data: &[u8]) -> Option<Vec<u8>> {
-    let mcver = MC_VERSION.get_or_init(|| {
-        let pointer = match std::ptr::NonNull::new(man) {
-            Some(yay) => yay,
-            None => {
-                log::warn!("AssetManager is null?, preposterous, mc detection failed");
-                return None;
-            }
-        };
-        let manager = unsafe { ndk::asset::AssetManager::from_ptr(pointer) };
-        get_current_mcver(manager)
-    });
-    // Just ignore if no Minecraft version was found
-    let mcver = (*mcver)?;
-    for version in materialbin::ALL_VERSIONS {
-        let mut material: CompiledMaterialDefinition = match data.pread_with(0, version) {
-            Ok(data) => data,
-            Err(e) => {
-                log::trace!("[version] Parsing failed: {e}");
-                continue;
-            }
-        };
-        // Prevent some work
-        if version == mcver 
-        {
-            // return None;
-        }
-        if (material.name == "RenderChunk" || material.name == "RenderChunkPrepass")
-            && version != MinecraftVersion::V1_21_110
-            && IS_UPPER_1_21_100.load(Ordering::Acquire)
-        {
-            handle_lightmaps(&mut material, version);
-        }
-        if material.name == "RenderChunk" && (
-            mcver == MinecraftVersion::V1_20_80 ||
-            mcver == MinecraftVersion::V1_21_20 ||
-            mcver == MinecraftVersion::V1_21_110
-        ) && (
-            version == MinecraftVersion::V1_19_60 ||
-            version == MinecraftVersion::V1_18_30
-        ) {
-            handle_samplers(&mut material);
-        }
-        let mut output = Vec::with_capacity(data.len());
-        if let Err(e) = material.write(&mut output, mcver) {
-            log::trace!("[version] Write error: {e}");
-            return None;
-        }
-        return Some(output);
-    }
-    None
+// Update Enum to include the new 2026 numbering
+#[derive(ValueEnum, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MVersion {
+    #[clap(name = "26.10.20")]
+    V26_10_20,
+    #[clap(name = "1.21.110")]
+    V1_21_110,
+    #[clap(name = "1.21.20")]
+    V1_21_20,
+    #[clap(name = "1.20.80")]
+    V1_20_80,
+    #[clap(name = "1.19.60")]
+    V1_19_60,
+    #[clap(name = "1.18.30")]
+    V1_18_30,
 }
 
-pub(crate) fn handle_lightmaps(materialbin: &mut CompiledMaterialDefinition) {
-    log::info!("mtbinloader25 handle_lightmaps");
+impl MVersion {
+    pub const fn as_version(&self) -> MinecraftVersion {
+        match self {
+            // Map 26.10.20 to the latest available binary format (likely same as 1.21.110)
+            Self::V26_10_20 => MinecraftVersion::V1_21_110,
+            Self::V1_21_110 => MinecraftVersion::V1_21_110,
+            Self::V1_21_20 => MinecraftVersion::V1_20_80, // Attention! (Preserved from original)
+            Self::V1_20_80 => MinecraftVersion::V1_21_20, // Attention! (Preserved from original)
+            Self::V1_19_60 => MinecraftVersion::V1_19_60,
+            Self::V1_18_30 => MinecraftVersion::V1_18_30,
+        }
+    }
+}
+
+pub(crate) fn handle_lightmaps(materialbin: &mut CompiledMaterialDefinition, target_version: MVersion) {
+    log::info!("mtbinloader25 handle_lightmaps processing for {:?}", target_version);
     let pattern = b"void main";
-    let replace_with = b"
+
+    // Define the specific fix for 26.10.20
+    let replace_with = match target_version {
+        // New Fix for 26.10.20+ (fract + y-component packing)
+        MVersion::V26_10_20 => b"
+#define a_texcoord1 fract(a_texcoord1.y * vec2(256.0, 4096.0))
+void main",
+        // Standard Fix for 1.21.100+
+        MVersion::V1_21_110 => b"
 #define a_texcoord1 vec2(fract(a_texcoord1.x*15.9375)+0.0001,floor(a_texcoord1.x*15.9375)*0.0625+0.0001)
-void main";
+void main",
+        _ => return, // Do not patch older versions
+    };
+
     let finder = Finder::new(pattern);
     let finder1 = Finder::new(b"v_lightmapUV = a_texcoord1;");
     let finder2 = Finder::new(b"v_lightmapUV=a_texcoord1;");
     let finder3 = Finder::new(b"#define a_texcoord1 ");
+    
+    // Detection for already patched 26.10.20 shaders
+    let finder_new_beta = Finder::new(b"vec2(256.0, 4096.0)"); 
+
     for (_, pass) in &mut materialbin.passes {
         for variants in &mut pass.variants {
             for (stage, code) in &mut variants.shader_codes {
                 if stage.stage == ShaderStage::Vertex {
-                    // log::info!("mtbinloader25 handle_lightmaps");
                     let mut bgfx: BgfxShader = code.bgfx_shader_data.pread(0).unwrap();
-                    // if version == MinecraftVersion::V1_21_20 
-                    // if stage.platform == ShaderCodePlatform::Essl100 
-                    if (
-                      finder3.find(&bgfx.code).is_some() || (
-                      finder1.find(&bgfx.code).is_none() &&
-                      finder2.find(&bgfx.code).is_none() )) {
-                        log::warn!("Skipping replacement due to not existing lightmap UV assignment");
+                    
+                    // Skip if:
+                    // 1. Already patched (#define exists)
+                    // 2. No standard assignment found (v_lightmapUV = ...)
+                    if finder3.find(&bgfx.code).is_some() 
+                        || (finder1.find(&bgfx.code).is_none() && finder2.find(&bgfx.code).is_none()) 
+                    {
+                        // Exception: If we target 26.10.20 and it already has the new packing, it's valid.
+                        if target_version == MVersion::V26_10_20 && finder_new_beta.find(&bgfx.code).is_some() {
+                             log::info!("Shader already has 26.10.20 packing.");
+                        } else {
+                             log::warn!("Skipping replacement: missing lightmap UV assignment or already patched.");
+                        }
                         continue;
                     }; 
-                    log::info!("autofix is doing lightmap replacing...");
+                    
+                    log::info!("autofix is applying lightmap fix...");
                     replace_bytes(&mut bgfx.code, &finder, pattern, replace_with);
                     code.bgfx_shader_data.clear();
                     bgfx.write(&mut code.bgfx_shader_data).unwrap();
@@ -109,6 +105,7 @@ void main";
         }
     }
 }
+
 fn handle_samplers(materialbin: &mut CompiledMaterialDefinition) {
     log::info!("mtbinloader25 handle_samplers");
     let pattern = b"void main ()";
@@ -125,8 +122,7 @@ void main ()";
             for variants in &mut pass.variants {
                 for (stage, code) in &mut variants.shader_codes {
                     if stage.stage == ShaderStage::Fragment && stage.platform_name == "ESSL_100" {
-                        // log::info!("mtbinloader25 handle_samplers");
-                        let mut bgfx: BgfxShader = code.bgfx_shader_data.pread(0).unwrap();
+                         let mut bgfx: BgfxShader = code.bgfx_shader_data.pread(0).unwrap();
                         replace_bytes(&mut bgfx.code, &finder, pattern, replace_with);
                         code.bgfx_shader_data.clear();
                         bgfx.write(&mut code.bgfx_shader_data).unwrap();
@@ -136,11 +132,12 @@ void main ()";
         }
     }
 }
+
 fn replace_bytes(codebuf: &mut Vec<u8>, finder: &Finder, pattern: &[u8], replace_with: &[u8]) {
     let sus = match finder.find(codebuf) {
         Some(yay) => yay,
         None => {
-            println!("oops");
+            println!("Pattern not found");
             return;
         }
     };
