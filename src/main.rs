@@ -12,9 +12,9 @@ use clap::{
     },
     Parser, ValueEnum,
 };
-
+use console::style;
 use materialbin::{CompiledMaterialDefinition, MinecraftVersion, WriteError};
-use owo_colors::{colors::Yellow, OwoColorize};
+// use owo_colors::{colors::Yellow, OwoColorize};
 use scroll::Pread;
 use tempfile::tempfile;
 use zip::{
@@ -82,10 +82,7 @@ fn main() -> anyhow::Result<()> {
         Some(version) => version.as_version(),
         None => {
             const STABLE_LATEST: MinecraftVersion = MinecraftVersion::V1_21_110;
-            println!(
-                "No target version specified, updating to latest stable: {}",
-                STABLE_LATEST
-            );
+            // println!("No target version specified, updating to latest stable: {}",STABLE_LATEST);
             STABLE_LATEST
         }
     };
@@ -95,14 +92,16 @@ fn main() -> anyhow::Result<()> {
         let output_filename: PathBuf = match &opts.output {
             Some(output_name) => output_name.to_owned(),
             None => {
-                let auto_name = update_filename(&opts.file, &mcversion, ".material.bin")?;
-                println!("No output name specified, using {auto_name:?}");
+                // let auto_name = update_filename(&opts.file, &mcversion, ".material.bin")?;
+                // println!("No output name specified, using {auto_name:?}");
+                let auto_name = opts.file.to_string().into();
+                // println!("No output name specified, overwriting input file.");
                 auto_name
             }
         };
         let mut tmp_file = tempfile()?;
         let mut output_file = file_to_shrodinger(&mut tmp_file, opts.yeet)?;
-        println!("Processing input {}", opts.file.cyan());
+        println!("Processing input {}", style(opts.file).cyan());
         file_update(&mut input_file, &mut output_file, mcversion)?;
         tmp_file.rewind()?;
         if !opts.yeet {
@@ -123,13 +122,13 @@ fn main() -> anyhow::Result<()> {
             Some(output_name) => output_name.to_owned(),
             None => {
                 let auto_name = update_filename(&opts.file, &mcversion, &extension)?;
-                println!("No output name specified, using {auto_name:?}");
+                // println!("No output name specified, using {auto_name:?}");
                 auto_name
             }
         };
         let mut tmp_file = tempfile()?;
         let mut output_file = file_to_shrodinger(&mut tmp_file, opts.yeet)?;
-        println!("Processing input zip {}", opts.file.cyan());
+        println!("Processing input zip {}", style(opts.file).cyan());
         zip_update(
             &mut input_file,
             &mut output_file,
@@ -196,7 +195,7 @@ where
             output_zip.raw_copy_file(file)?;
             continue;
         }
-        print!("Processing file {}", file.name().green());
+        print!("Processing file {}", style(file.name()).green());
         //   let mut data = Vec::with_capacity(file.size().try_into()?);
         data.clear();
         data.reserve(file.size().try_into()?);
@@ -216,8 +215,8 @@ where
                 WriteError::Compat(issue) => {
                     println!(
                         "{}:\n{}",
-                        "Ignoring materialbin because of compatibility error:"
-                            .fg::<Yellow>()
+                        style("Ignoring materialbin because of compatibility error:")
+                            .on_yellow()
                             .red(),
                         issue
                     );
@@ -232,24 +231,33 @@ where
     }
     output_zip.finish()?;
     if warnings != 0 {
-        println!("{}", format!("{warnings} warnings while updating").yellow());
+        println!("{}", style(format!("{warnings} warnings while updating")).yellow());
     }
     println!(
         "Ported {} materials in zip to version {}",
-        translated_shaders.to_string().green(),
-        version.to_string().cyan()
+        style(translated_shaders.to_string()).green(),
+        style(version.to_string()).cyan()
     );
     Ok(())
 }
 
 fn read_material(data: &[u8]) -> anyhow::Result<CompiledMaterialDefinition> {
     for version in materialbin::ALL_VERSIONS {
-        if let Ok(material) = data.pread_with(0, version) {
-            print!("{}", format!(" [{version}]\n").dimmed());
-            return Ok(material);
+        // if let Ok(material) = data.pread_with(0, version) {
+        //     print!("{}", format!(" [{version}]\n").dimmed());
+        //     return Ok(material);
+        // }
+        match data.pread_with(0, version) {
+            Ok(material) => {
+                println!("OK: {}", style(format!(" [{version}]")).dim());
+                return Ok(material);
+            }
+            Err(e) => {
+                println!("[{version}]Parsing failed: {e}");
+                continue;
+            }
         }
     }
-
     anyhow::bail!("Material file is invalid");
 }
 enum ShrodingerOutput<'a> {
