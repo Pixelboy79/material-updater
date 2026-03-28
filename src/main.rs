@@ -356,11 +356,8 @@ fn read_material(data: &[u8], verbose: bool) -> anyhow::Result<CompiledMaterialD
             }
             Err(e) => {
                 if verbose {
-                    println!(
-                        "Failed [{version}] {}, backtrace:{}",
-                        &e,
-                        e.get_backtracey()
-                    )
+                    // Removed the .get_backtracey() call to fix the compile error
+                    println!("Failed [{version}] {}", &e);
                 }
             }
         }
@@ -368,7 +365,6 @@ fn read_material(data: &[u8], verbose: bool) -> anyhow::Result<CompiledMaterialD
 
     anyhow::bail!("Material file is invalid");
 }
-
 enum ShrodingerOutput<'a> {
     File(&'a mut File),
     Nothing,
