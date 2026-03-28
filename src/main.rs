@@ -25,7 +25,7 @@ use zip::{
 };
 
 #[derive(Parser)]
-#[clap(name = "Material Updater", version = "0.1.12")]
+#[clap(name = "Material Updater", version = "0.1.13")]
 #[command(version, about, long_about = None, styles = get_style())]
 struct Options {
     /// Shader pack file to update
@@ -41,6 +41,7 @@ struct Options {
     yeet: bool,
     #[clap(short, long)]
     verbose: bool,
+    
     /// Output version
     #[clap(short, long)]
     target_version: Option<MVersion>,
@@ -52,13 +53,34 @@ struct Options {
 
 #[derive(ValueEnum, Clone)]
 enum MVersion {
-    V26_10, // NEW: 26.10 Target
+    #[value(name = "26.10")]
+    V26_10,
+    #[value(name = "26.0.24")]
     V26_0_24,
+    #[value(name = "1.21.110")]
     V1_21_110,
+    #[value(name = "1.21.20")]
     V1_21_20,
+    #[value(name = "1.20.80")]
     V1_20_80,
+    #[value(name = "1.19.60")]
     V1_19_60,
+    #[value(name = "1.18.30")]
     V1_18_30,
+}
+
+impl std::fmt::Display for MVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::V26_10 => write!(f, "26.10"),
+            Self::V26_0_24 => write!(f, "26.0.24"),
+            Self::V1_21_110 => write!(f, "1.21.110"),
+            Self::V1_21_20 => write!(f, "1.21.20"),
+            Self::V1_20_80 => write!(f, "1.20.80"),
+            Self::V1_19_60 => write!(f, "1.19.60"),
+            Self::V1_18_30 => write!(f, "1.18.30"),
+        }
+    }
 }
 
 impl MVersion {
@@ -70,7 +92,7 @@ impl MVersion {
             Self::V1_21_20 => MinecraftVersion::V1_21_20,
             Self::V1_21_110 => MinecraftVersion::V1_21_110,
             Self::V26_0_24 => MinecraftVersion::V26_0_24,
-            Self::V26_10 => MinecraftVersion::V1_21_110, // Binary matches 1.21.110
+            Self::V26_10 => MinecraftVersion::V1_21_110, // Uses 1.21.110 binary writer
         }
     }
 }
@@ -88,12 +110,11 @@ fn main() -> anyhow::Result<()> {
     let target_mversion = match opts.target_version {
         Some(version) => version,
         None => {
-            println!("No target version specified, updating to latest stable: V1_21_110");
+            println!("No target version specified, updating to latest stable: 1.21.110");
             MVersion::V1_21_110
         }
     };
     
-    let mcversion = target_mversion.as_version();
     let mut input_file =
         BufReader::new(File::open(&opts.file).with_context(|| "Error while opening input file")?);
         
@@ -101,7 +122,7 @@ fn main() -> anyhow::Result<()> {
         let output_filename: PathBuf = match &opts.output {
             Some(output_name) => output_name.to_owned(),
             None => {
-                let auto_name = update_filename(&opts.file, &mcversion, ".material.bin")?;
+                let auto_name = update_filename(&opts.file, &target_mversion, ".material.bin")?;
                 println!("No output name specified, using {auto_name:?}");
                 auto_name
             }
@@ -130,7 +151,7 @@ fn main() -> anyhow::Result<()> {
         let output_filename: PathBuf = match &opts.output {
             Some(output_name) => output_name.to_owned(),
             None => {
-                let auto_name = update_filename(&opts.file, &mcversion, &extension)?;
+                let auto_name = update_filename(&opts.file, &target_mversion, &extension)?;
                 println!("No output name specified, using {auto_name:?}");
                 auto_name
             }
@@ -169,7 +190,7 @@ fn file_to_shrodinger<'a>(
 
 fn update_filename(
     filename: &str,
-    version: &MinecraftVersion,
+    version: &MVersion,
     postfix: &str,
 ) -> anyhow::Result<PathBuf> {
     let stripped = filename
@@ -189,20 +210,19 @@ vec2 lightmapUtil_26_10_new(vec2 tc1) {
 #define a_texcoord1 lightmapUtil_26_10_new(a_texcoord1)
 ";
 
-const SAMPLER_FIX: &[u8] = b"
-#if __VERSION__ >= 300
-  #define texture(tex,uv) vec4(texture(tex,uv).rgb,textureLod(tex,uv,0.0).a)
-#else
-  #define texture2D(tex,uv) vec4(texture2D(tex,uv).rgb,texture2DLod(tex,uv,0.0).a)
-#endif
-";
-
-// Utility to find bytes without adding the memchr dependency to the updater
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|window| window == needle)
 }
 
-// THE NEW PATCHING LOGIC
+fn replace_bytes(data: &mut Vec<u8>, from: &[u8], to: &[u8]) -> bool {
+    let mut changed = false;
+    while let Some(pos) = find_subsequence(data, from) {
+        data.splice(pos..pos + from.len(), to.iter().cloned());
+        changed = true;
+    }
+    changed
+}
+
 fn patch_material(material: &mut CompiledMaterialDefinition, target_version: &MVersion) {
     let is_26_10 = matches!(target_version, MVersion::V26_10);
 
@@ -216,7 +236,14 @@ fn patch_material(material: &mut CompiledMaterialDefinition, target_version: &MV
 
                 let mut changed = false;
 
-                // 26.10+ Lightmap Y-Component Patch
+                // 1. Wipe out leftover 1.21.130 math so it doesn't collide with the new 26.10 math
+                if find_subsequence(&bgfx.code, b"65535").is_some() {
+                    if replace_bytes(&mut bgfx.code, b"a_texcoord1 * 65535.0", b"a_texcoord1          ") { changed = true; }
+                    if replace_bytes(&mut bgfx.code, b"a_texcoord1*65535.0", b"a_texcoord1        ") { changed = true; }
+                    if replace_bytes(&mut bgfx.code, b"a_texcoord1 * 65535.", b"a_texcoord1         ") { changed = true; }
+                }
+
+                // 2. Apply the 26.10+ Lightmap Patch
                 if is_26_10 
                     && stage.stage == materialbin::pass::ShaderStage::Vertex 
                     && (stage.platform == materialbin::pass::ShaderCodePlatform::Essl100 || stage.platform == materialbin::pass::ShaderCodePlatform::Essl300) 
@@ -224,17 +251,6 @@ fn patch_material(material: &mut CompiledMaterialDefinition, target_version: &MV
                     if find_subsequence(&bgfx.code, b"vec2(256.0, 4096.0)").is_none() {
                         if let Some(pos) = find_subsequence(&bgfx.code, b"void main") {
                             bgfx.code.splice(pos..pos, LIGHTMAP_26_10_FIX.iter().cloned());
-                            changed = true;
-                        }
-                    }
-                }
-
-                // Fragment Mipmap Sampler Patch (Opaque / AlphaTest)
-                if stage.stage == materialbin::pass::ShaderStage::Fragment && stage.platform_name == "ESSL_100" {
-                    if find_subsequence(&bgfx.code, b"textureLod(tex,uv,0.0).a").is_none() {
-                        // Using 'void main ()' as the injection point
-                        if let Some(pos) = find_subsequence(&bgfx.code, b"void main ()") {
-                            bgfx.code.splice(pos..pos, SAMPLER_FIX.iter().cloned());
                             changed = true;
                         }
                     }
@@ -264,7 +280,6 @@ where
     
     let mut material = read_material(&data, verbose)?;
     
-    // Patch before writing!
     patch_material(&mut material, version);
     material.write(output, version.as_version())?;
     
@@ -306,7 +321,6 @@ where
             }
         };
         
-        // Patch before writing!
         patch_material(&mut material, version);
         sus(&material);
         
@@ -339,10 +353,11 @@ where
     if warnings != 0 {
         println!("{}", format!("{warnings} warnings while updating").yellow());
     }
+    
     println!(
         "Ported {} materials in zip to version {}",
         translated_shaders.to_string().green(),
-        version.as_version().to_string().cyan()
+        version.to_string().cyan() 
     );
     Ok(())
 }
@@ -356,7 +371,6 @@ fn read_material(data: &[u8], verbose: bool) -> anyhow::Result<CompiledMaterialD
             }
             Err(e) => {
                 if verbose {
-                    // Removed the .get_backtracey() call to fix the compile error
                     println!("Failed [{version}] {}", &e);
                 }
             }
@@ -365,6 +379,7 @@ fn read_material(data: &[u8], verbose: bool) -> anyhow::Result<CompiledMaterialD
 
     anyhow::bail!("Material file is invalid");
 }
+
 enum ShrodingerOutput<'a> {
     File(&'a mut File),
     Nothing,
